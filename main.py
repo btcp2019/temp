@@ -232,7 +232,7 @@ if __name__ == '__main__':
                 D, I = index.search(query_frame_features, kNeighbor[0])
                 
                 # 将查询视频的一帧替换为kNeighbor[0]个帧的均值
-                new_query = np.zeros(())
+                new_query = [features[range(vid2frameNum[query_vid])]]
                 for i in range(vid2frameNum[query_vid]):
                     cur_arr = [features[I[i]]]
                     cur_arr = np.mean(cur_arr, axis=0, keepdims=False)
