@@ -33,6 +33,7 @@ import time
 from scipy.spatial.distance import cdist
 from future.utils import viewitems, lrange
 from sklearn.metrics import precision_recall_curve
+from sklearn.decomposition import PCA
 import pdb
 import time
 import faiss
@@ -66,9 +67,12 @@ def load_features(dataset_dir, is_gv=True):
                 cur_arr /= (np.linalg.norm(cur_arr, ord=2, axis=0))
                 vid2features[vid] = cur_arr
             else:
-                cur_arr = g1.get(vid)
+                cur_arr = np.asarray(g1.get(vid))
+                #pdb.set_trace()
                 # 先不用平均值特征
-                # cur_arr = np.concatenate([cur_arr, np.mean(cur_arr, axis=0, keepdims=True)], axis=0)
+                mean_arr = np.mean(cur_arr, axis=0, keepdims=True)
+#                cur_arr -= mean_arr
+                cur_arr = np.concatenate([cur_arr, mean_arr], axis=0)
                 vid2features[vid] = cur_arr
                 final_vids.extend([vid] * len(cur_arr))
                 features.extend(cur_arr)
@@ -76,6 +80,28 @@ def load_features(dataset_dir, is_gv=True):
         return vid2features
     else:
         return final_vids, features, vid2features
+
+
+def calculate_similarities(query_features, all_features):
+    """
+      用于计算两组特征(已经做过l2-norm)之间的相似度
+      Args:
+        queries: shape: [N, D]
+        features: shape: [M, D]
+      Returns:
+        similarities: shape: [N, M]
+    """
+    similarities = []
+    # 计算待查询视频和所有视频的距离
+    dist = np.nan_to_num(cdist(query_features, all_features, metric='cosine'))
+    for i, v in enumerate(query_features):
+        # 归一化，将距离转化成相似度
+        # sim = np.round(1 - dist[i] / dist[i].max(), decimals=6)
+        sim = 1 - dist[i]
+        # 按照相似度的从大到小排列，输出index
+        similarities += [[(s, sim[s]) for s in sim.argsort()[::-1] if not np.isnan(sim[s])]]
+    return similarities
+
 
 def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
     """
@@ -141,114 +167,231 @@ class GTOBJ:
             self.annotations = json.load(f)
         self.dataset = set(np.loadtxt(dataset_path, dtype=str).tolist())
 
-if __name__ == '__main__':
 
-    gtobj = GTOBJ()
-    relevant_labels_mapping = {
-        'DSVR': ['ND','DS'],
-        'CSVR': ['ND','DS','CS'],
-        'ISVR': ['ND','DS','CS','IS'],
-    }
+gtobj = GTOBJ()
+relevant_labels_mapping = {
+    'DSVR': ['ND','DS'],
+    'CSVR': ['ND','DS','CS'],
+    'ISVR': ['ND','DS','CS','IS'],
+}
 
-    with open('final_vids.pk', 'rb') as handle:
-        final_vids = pk.load(handle)
-    final_vids = np.asarray(final_vids)
-    features = np.load("frame_features.npy")
-    print('features.shape = ', features.shape)
+### 0827 18:04
+final_vids, features, vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=False)
+#pdb.set_trace()
 
-    d = 512
-    res = faiss.StandardGpuResources()
-    index = faiss.IndexFlatIP(d)
-    index = faiss.index_cpu_to_gpu(res, 2, index)
-    index.add(features)
+#with open('final_vids2.pk', 'wb') as handle:
+#    pk.dump(final_vids, handle)
 
-    with open('vid2features_keys.pk', 'rb') as handle:
-        vids = pk.load(handle)
+#with open('features2.pk', 'wb') as handle:
+#    pk.dump(features, handle)
 
-    global_features = np.load("global_features.npy")
-    print(global_features.shape)  ## (225959, 512)
+#with open('final_vids2.pk', 'rb') as handle:
+#    final_vids = pk.load(handle)
 
-    with open('/home/camp/FIVR/vid2name.pk', 'rb') as pk_file:
-        vid2names = pk.load(pk_file)
+#with open('features2.pk', 'rb') as handle:
+#    features = pk.load(handle)  ## (6556259, 512)
 
-    with open('/root/surfzjy/camp/FIVR/name2vid.pk', 'rb') as pk_file:
-        name2vids = pk.load(pk_file)
+final_vids = np.asarray(final_vids)
+features = np.asarray(features)
 
-    print('Begin evaluation~')
-    # 开始评估
-    annotation_dir = '/home/camp/FIVR/annotation'
-    names = np.asarray([vid2names[vid][0] for vid in vids])
-    query_names = None
-    results = None
-    topK = 233
+#features = np.load("frame_features.npy")
+print('features.shape = ', features.shape)
 
-    vid2frameNum = collections.defaultdict(lambda: 0)
-    for i in final_vids:
-        vid2frameNum[i] += 1
+d = 512
 
-    ## 建立一个vids2idx的映射dict
-    vid2idx = {}
-    for i, vid in enumerate(vids):
-        vid2idx[vid] = i
+#res = faiss.StandardGpuResources()
+index = faiss.IndexFlatIP(d)
+index = faiss.index_cpu_to_all_gpus(index)
+#index = faiss.index_cpu_to_gpu(res, 2, index)
+index.add(features)
 
-    for task_name in ['DSVR', 'CSVR', 'ISVR']:
-        annotation_path = os.path.join(annotation_dir, task_name + '.json')
-        with open(annotation_path, 'r') as annotation_file:
-            json_obj = json.load(annotation_file)
-        if results is None:
-            results = dict()
-            query_names = json_obj.keys()
-            query_names = [str(query_name) for query_name in query_names]
-            query_vids = [name2vids[query_name] for query_name in query_names]
+#m = 16                                   # number of subquantizers
+#n_bits = 8                               # bits allocated per subquantizer
+#index = faiss.IndexPQ (d, m, n_bits)        # Create the index
+#index = faiss.index_cpu_to_all_gpus(index)
+#index.train (features)                       # Training
+#index.add(features)                          # Populate the index
+
+#nlist = 512  # 聚类中心的个数
+#quantizer = faiss.IndexFlatIP(d)
+#res = faiss.StandardGpuResources()
+#index = faiss.IndexIVFFlat(quantizer, d, nlist, faiss.METRIC_INNER_PRODUCT)
+#index = faiss.index_cpu_to_all_gpus(index)
+#index = faiss.index_cpu_to_gpu(res, 1, index)
+#index.train(features)
+#index.nprobe = 1024
+#index = faiss.index_cpu_to_gpu(res, 1, index)
+#index.add(features)
+#index = faiss.index_cpu_to_all_gpus(index)
+
+#index.train(features)
+#faiss.write_index(index, 'test_ivf.index')
+#index = faiss.read_index('faiss_frame_features.index')
+#index = faiss.index_cpu_to_all_gpus(index)
+#with open('vid2features.pk', 'rb') as handle:
+#    vid2features = pk.load(handle)
+# pdb.set_trace()    
+#vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=True)
+#with open('vid2features.pk', 'wb') as handle:
+#    pk.dump(vid2features, handle, protocol=pk.HIGHEST_PROTOCOL)
+
+# 加载特征
+vids = list(vid2features.keys())
+print(vids[:10])
+#with open('vids2.pk', 'wb') as handle:
+#    pk.dump(final_vids, handle)
+
+#with open('vids2.pk', 'rb') as handle:
+#    vids = pk.load(handle)
+#print(vids[:10])
+#global_features = np.squeeze(np.asarray(list(vid2features.values()), np.float32))
+#np.save("global_features.npy", global_features)
+#global_features = np.load("global_features.npy")
+#print(global_features.shape)  ## (225959, 512)
+#np.save("global_features.npy", global_features)
+#pdb.set_trace()
+# 加载vid2name 和 name2vid
+with open('/home/camp/FIVR/vid2name.pk', 'rb') as pk_file:
+    vid2names = pk.load(pk_file)
+## name2vid.txt 转换为dict形式并pk序列化保存
+#name2vid_d = {}
+#with open('/root/surfzjy/camp/FIVR/name2vid.txt', 'rb') as f:
+#    lines = f.readlines()
+#    for i in lines:
+#        i = str(i, encoding = "utf-8")
+#        key, val = i.split(' ')
+#        val = val.split('\n')[0]
+#        name2vid_d[key] = val
+
+#name2vids = {}
+#for i, j in vid2names.items():
+#    name2vids[j[0]] = i
+
+#pdb.set_trace()
+
+with open('/root/surfzjy/camp/FIVR/name2vid.pk', 'rb') as pk_file:
+    name2vids = pk.load(pk_file)
+
+### 0827-16:50
+#d = 512
+#index = faiss.IndexFlatIP(d)
+#index.train(global_features)
+#index.add(global_features)
+#faiss.write_index(index, 'faiss_global_features.index')
+#index = faiss.read_index('faiss_global_features.index')
+#D, I = index.search(training_vectors[:100], 5)
+#print('ok')
+#pdb.set_trace()
+
+print('Begin evaluation~')
+# 开始评估
+annotation_dir = '/home/camp/FIVR/annotation'
+names = np.asarray([vid2names[vid][0] for vid in vids])
+query_names = None
+results = None
+
+vid2frameNum = collections.defaultdict(lambda: 0)
+for i in final_vids:
+    vid2frameNum[i] += 1
+        
+## 建立一个vids2idx的映射dict
+vid2idx = {}
+for i, vid in enumerate(vids):
+    vid2idx[vid] = i
+
+for task_name in ['DSVR', 'CSVR', 'ISVR']:
+#for task_name in ['DSVR']:  ## 先只对第一个任务进行mAP计算
+    annotation_path = os.path.join(annotation_dir, task_name + '.json')
+    with open(annotation_path, 'r') as annotation_file:
+        json_obj = json.load(annotation_file)
+    if results is None:
+        results = dict()
+        query_names = json_obj.keys()
+        query_names = [str(query_name) for query_name in query_names]
+        query_vids = [name2vids[query_name] for query_name in query_names]
+        #pdb.set_trace()
+        query_frame_indexs = []
+        for query_vid in query_vids:
+            print(query_vid)
+            t1 = time.time()
+            tmp = np.where(final_vids == query_vid)
+            if len(tmp) != 0 and len(tmp[0]) != 0:
+                query_frame_indexs = tmp[0]
+            else:
+                print('skip query: ', query_vid)
+            query_frame_features = np.squeeze(features[query_frame_indexs])
+ #           t1 = time.time()
+            D, I = index.search(query_frame_features, 100)  # just keep first 1000 results
+            tempI = I.flatten()
+            cnt = collections.defaultdict(lambda: 0.0)
+            for i in tempI:
+                cnt[int(i)] += 1
+            I = np.unique(I)
+            query_frame_features2 = np.squeeze(features[I])
+            D2, I2 = index.search(query_frame_features2,666)
+            similarities = np.stack((I2, D2), axis=-1)
             #pdb.set_trace()
-            query_frame_indexs = []
-            for query_vid in query_vids:
-                print(query_vid)
-                t1 = time.time()
-                tmp = np.where(final_vids == query_vid)
-                if len(tmp) != 0 and len(tmp[0]) != 0:
-                    query_frame_indexs = tmp[0]
-                else:
-                    print('skip query: ', query_vid)
-                query_frame_features = np.squeeze(features[query_frame_indexs])
-     #           t1 = time.time()
-                D, I = index.search(query_frame_features, topK)  # just keep first 1000 results
-     #           t2 = time.time()
-     #           print('faiss times {}'.format(t2 - t1))
-                similarities = np.stack((I, D), axis=-1)
-                ## 得到query矩阵，现在对每个gallery的视频进行打分
-                scorelog = collections.defaultdict(lambda: 0.0)
-                ### optimize score count
-                for i in range(similarities.shape[0]):
-                    for j in range(similarities.shape[1]):
-                        vid_idx = vid2idx[final_vids[int(similarities[i][j][0])]]
-                        scorelog[final_vids[int(similarities[i][j][0])]] += similarities[i][j][1]
+            ## 得到query矩阵，现在对每个gallery的视频进行打分
+            scorelog = collections.defaultdict(lambda: 0.0)
+            ### optimize score count
+            for i in range(similarities.shape[0]):
+                cot = cnt[int(I[i])]
+                for j in range(similarities.shape[1]):
+                    vid_idx = vid2idx[final_vids[int(similarities[i][j][0])]]
+                    scorelog[final_vids[int(similarities[i][j][0])]] += similarities[i][j][1] * cot
 
-                res = []
-                for k, v in scorelog.items():
-                    if v > 0:
-                        nb_frame = vid2frameNum[k]
-                        res.append([k, v / nb_frame])
-                res.sort(key=lambda a: -a[1])
-                res_id_set = set([i[0] for i in res])
-                left_id_set = set(vids) - res_id_set
-                query_name = vid2names[query_vid][0]
-                query_result = {}
-                for i in res:
-                    name, sim = vid2names[i[0]][0], i[1]
-                    query_result[name] = sim
-                for j in left_id_set:
-                    name = vid2names[j][0]
-                    query_result[name] = 0.0
-                del query_result[query_name]
-                results[query_name] = query_result
-                #pdb.set_trace()
-                t2 = time.time()
-                print('times used {}'.format(t2 - t1))
+            
+            res = []
+            for k, v in scorelog.items():
+                if v > 0:
+                    nb_frame = vid2frameNum[k]
+                    res.append([k, v / nb_frame])
+            res.sort(key=lambda a: -a[1])
+            res_id_set = set([i[0] for i in res])
+            left_id_set = set(vids) - res_id_set
+            query_name = vid2names[query_vid][0]
+            query_result = {}
+            for i in res:
+                name, sim = vid2names[i[0]][0], i[1] 
+                query_result[name] = sim
+            for j in left_id_set:
+                name = vid2names[j][0]
+                query_result[name] = 0.0
+            del query_result[query_name]
+            results[query_name] = query_result
+            #pdb.set_trace()
+            t2 = time.time()
+            print('times used {}'.format(t2 - t1))
+            #for vid in vids:
+                #scorelog[vid] = 0.0
+                #for i in range(similarities.shape[0]):
+                #    for j in range(similarities.shape[1]):
+                #        if final_vids[int(similarities[i][j][0])] == vid:
+                #            print('AAA')
+                #            scorelog[vid] += similarities[i][j][1]
+                #i, j = 0, 0
+                #while i < similarities.shape[0]:
+                #    while j < similarities.shape[1]:
+                #        if final_vids[int(similarities[i][j][0])] == vid:
+                #            scorelog[vid] += similarities[i][j][1]
+                #            break
+                #        j += 1
+                #    i += 1
+            #pdb.set_trace()
 
-        mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
-                                                  relevant_labels=relevant_labels_mapping[task_name],
-                                                  dataset=gtobj.dataset,
-                                                  quiet=False)
-        print('{} mAPOffcial is {}'.format(task_name, np.mean(mAPOffcial)))
+        ### 0827 17:00
+        #similarities = calculate_similarities(query_features, global_features)
+        #results = dict()
+        #for query_idx, query_name in enumerate(query_names):
+        #    cur_sim = similarities[query_idx]
+        #    query_result = dict(
+        #        map(lambda v: (names[int(v[0])], v[1]), cur_sim)
+        #    )
+        #    del query_result[query_name]
+        #    results[query_name] = query_result
+    mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
+                                              relevant_labels=relevant_labels_mapping[task_name],
+                                              dataset=gtobj.dataset,
+                                              quiet=False)
+    print('{} mAPOffcial is {}'.format(task_name, np.mean(mAPOffcial)))
 
