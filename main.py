@@ -215,17 +215,17 @@ if __name__ == '__main__':
                     query_frame_indexs = tmp[0]
                 else:
                     print('skip query: ', query_vid)
-
+                
+                t1 = time.time()
                 # 对查询视频每个帧搜索最相似的kNeighbor[0]个帧
                 query_frame_features = np.squeeze(features[query_frame_indexs])
                 D, I = index.search(query_frame_features, kNeighbor[0])
-                # 将其伸展为一维向量，然后做计数并去重，减少重复计算
-                tempI = I.flatten()
-                cnt = collections.defaultdict(lambda: 0.0)
-                for i in tempI:
-                    cnt[int(i)] += 1
-                I = np.unique(I)
+                
+                # 将查询视频的一帧替换为kNeighbor[0]个帧的均值
+                for i in range(vid2frameNum[query_vid]):
 
+                
+                 
                 # 对n*kNeighbor[0]个帧做第二轮搜索
                 query_frame_features2 = np.squeeze(features[I])
                 D2, I2 = index.search(query_frame_features2, kNeighbor[1])
@@ -257,6 +257,8 @@ if __name__ == '__main__':
                     query_result[name] = 0.0
                 del query_result[query_name]
                 results[query_name] = query_result
+                t2 = time.time()
+                print(t2 - t1)
 
         mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
                                                   relevant_labels=relevant_labels_mapping[task_name],
