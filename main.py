@@ -157,8 +157,18 @@ if __name__ == '__main__':
 
     # 使用faiss建立索引, 并转移到gpu上
     d = 512
-    index = faiss.IndexFlatIP(d)
-    index = faiss.index_cpu_to_all_gpus(index)
+    index = 0
+    isTest = 1
+
+    if 1 == isTest:
+        res = faiss.StandardGpuResources()
+        index = faiss.IndexFlatIP(d)
+        index = faiss.index_cpu_to_gpu(res, 0, index)
+
+    else:
+        index = faiss.IndexFlatIP(d)
+        index = faiss.index_cpu_to_all_gpus(index)
+
     index.add(features)
 
     # 加载特征
