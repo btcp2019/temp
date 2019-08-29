@@ -45,7 +45,6 @@ def read_h5file(path):
     g2 = hf.get('names')
     return g1.keys(), g1, g2
 
-
 def load_features(dataset_dir, is_gv=True):
     '''
     加载特征
@@ -68,10 +67,7 @@ def load_features(dataset_dir, is_gv=True):
                 vid2features[vid] = cur_arr
             else:
                 cur_arr = np.asarray(g1.get(vid))
-                #pdb.set_trace()
-                # 先不用平均值特征
                 mean_arr = np.mean(cur_arr, axis=0, keepdims=True)
-#                cur_arr -= mean_arr
                 cur_arr = np.concatenate([cur_arr, mean_arr], axis=0)
                 vid2features[vid] = cur_arr
                 final_vids.extend([vid] * len(cur_arr))
@@ -136,7 +132,6 @@ def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
     # return mAP
     return mAP, np.mean(pr, axis=0)[::-1]
 
-
 class GTOBJ:
     def __init__(self):
         annotation_path = '/home/camp/FIVR/annotation/annotation.json'
@@ -146,7 +141,7 @@ class GTOBJ:
         self.dataset = set(np.loadtxt(dataset_path, dtype=str).tolist())
 
 
-if __name__ == '__main__'
+if __name__ == '__main__':
 
     gtobj = GTOBJ()
     relevant_labels_mapping = {
@@ -160,10 +155,8 @@ if __name__ == '__main__'
     final_vids = np.asarray(final_vids)
     features = np.asarray(features)
 
-    print('features.shape = ', features.shape)
-
+    # 使用faiss建立索引, 并转移到gpu上
     d = 512
-
     index = faiss.IndexFlatIP(d)
     index = faiss.index_cpu_to_all_gpus(index)
     index.add(features)
@@ -176,25 +169,35 @@ if __name__ == '__main__'
     with open('/home/camp/FIVR/vid2name.pk', 'rb') as pk_file:
         vid2names = pk.load(pk_file)
 
-    with open('/root/surfzjy/camp/FIVR/name2vid.pk', 'rb') as pk_file:
+    with open('/home/camp/FIVR/name2vid.pk', 'rb') as pk_file:
         name2vids = pk.load(pk_file)
 
-    print('Begin evaluation~')
     # 开始评估
     annotation_dir = '/home/camp/FIVR/annotation'
     names = np.asarray([vid2names[vid][0] for vid in vids])
     query_names = None
     results = None
 
+    # 计算每个视频有多少帧
     vid2frameNum = collections.defaultdict(lambda: 0)
     for i in final_vids:
         vid2frameNum[i] += 1
 
-    ## 建立一个vids2idx的映射dict
+    # 建立一个vids2idx的映射dict
     vid2idx = {}
     for i, vid in enumerate(vids):
         vid2idx[vid] = i
 
+    ## 计算方法
+    # 对于有n个帧查询视频的每个帧，在所有视频帧中搜索与其最相似的K个帧并获得相似度，其他帧默认与该帧相似度为0
+    # 然后根据搜索结果对所有视频打分，对所有视频按照分数排序即可
+    # 但由于faiss最多支持K=1024，所以我们为了使K能够更大
+    # 分为了两轮，第一轮对于有n个帧查询视频的每个帧，在所有视频帧中搜索与其最相似的kNeighbor[0]个帧
+    # 第二轮对于这n*kNeighbor[0]个帧，在所有视频帧中搜索与其最相似的kNeighbor[1]个帧
+    # 这样对于查询视频的每个帧，我们都获得了与其最相似的kNeighbor[0]*kNeighbor[1]个帧
+    kNeighbor = [75, 150]
+
+    # 计算结果并进行评估
     for task_name in ['DSVR', 'CSVR', 'ISVR']:
         annotation_path = os.path.join(annotation_dir, task_name + '.json')
         with open(annotation_path, 'r') as annotation_file:
@@ -205,34 +208,36 @@ if __name__ == '__main__'
             query_names = [str(query_name) for query_name in query_names]
             query_vids = [name2vids[query_name] for query_name in query_names]
             query_frame_indexs = []
+
             for query_vid in query_vids:
-                print(query_vid)
-                t1 = time.time()
                 tmp = np.where(final_vids == query_vid)
                 if len(tmp) != 0 and len(tmp[0]) != 0:
                     query_frame_indexs = tmp[0]
                 else:
                     print('skip query: ', query_vid)
+
+                # 对查询视频每个帧搜索最相似的kNeighbor[0]个帧
                 query_frame_features = np.squeeze(features[query_frame_indexs])
-                D, I = index.search(query_frame_features, 100)  # just keep first 1000 results
+                D, I = index.search(query_frame_features, kNeighbor[0])
+                # 将其伸展为一维向量，然后做计数并去重，减少重复计算
                 tempI = I.flatten()
                 cnt = collections.defaultdict(lambda: 0.0)
                 for i in tempI:
                     cnt[int(i)] += 1
                 I = np.unique(I)
+
+                # 对n*kNeighbor[0]个帧做第二轮搜索
                 query_frame_features2 = np.squeeze(features[I])
-                D2, I2 = index.search(query_frame_features2,666)
+                D2, I2 = index.search(query_frame_features2, kNeighbor[1])
                 similarities = np.stack((I2, D2), axis=-1)
-                #pdb.set_trace()
-                ## 得到query矩阵，现在对每个gallery的视频进行打分
+
+                # 对所有视频打分并排序获得结果
                 scorelog = collections.defaultdict(lambda: 0.0)
-                ### optimize score count
                 for i in range(similarities.shape[0]):
                     cot = cnt[int(I[i])]
                     for j in range(similarities.shape[1]):
                         vid_idx = vid2idx[final_vids[int(similarities[i][j][0])]]
                         scorelog[final_vids[int(similarities[i][j][0])]] += similarities[i][j][1] * cot
-
 
                 res = []
                 for k, v in scorelog.items():
@@ -252,9 +257,6 @@ if __name__ == '__main__'
                     query_result[name] = 0.0
                 del query_result[query_name]
                 results[query_name] = query_result
-                #pdb.set_trace()
-                t2 = time.time()
-                print('times used {}'.format(t2 - t1))
 
         mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
                                                   relevant_labels=relevant_labels_mapping[task_name],
