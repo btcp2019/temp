@@ -229,19 +229,13 @@ if __name__ == '__main__':
                 t1 = time.time()
                 # 对查询视频每个帧搜索最相似的kNeighbor[0]个帧
                 query_frame_features = np.squeeze(features[query_frame_indexs])
-                D, I = index.search(query_frame_features, kNeighbor[0])
-                
-                # 将查询视频的一帧替换为kNeighbor[0]个帧的均值
-                new_query = [features[range(vid2frameNum[query_vid])]]
-                for i in range(vid2frameNum[query_vid]):
-                    cur_arr = [features[I[i]]]
-                    cur_arr = np.mean(cur_arr, axis=0, keepdims=False)
-                    cur_arr /= (np.linalg.norm(cur_arr, ord=2, axis=0))
-                    new_query[i] = cur_arr
-                 
-                # 对n*kNeighbor[0]个帧做第二轮搜索
-                query_frame_features2 = np.squeeze(new_query)
-                D2, I2 = index.search(query_frame_features2, kNeighbor[1])
+                preD, preI = index.search(query_frame_features, kNeighbor[0])
+                for i in range(preI.shape[0]):
+                    gallery_feats = features[preI[i]]
+                    mean_gallery_feats = np.mean(gallery_feats, axis=0, keepdims=False)
+                    query_frame_features[i] = mean_gallery_feats
+
+                D2, I2 = index.search(query_frame_features, kNeighbor[1])
                 similarities = np.stack((I2, D2), axis=-1)
 
                 # 对所有视频打分并排序获得结果
