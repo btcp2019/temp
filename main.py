@@ -222,22 +222,24 @@ if __name__ == '__main__':
                 D, I = index.search(query_frame_features, kNeighbor[0])
                 
                 # 将查询视频的一帧替换为kNeighbor[0]个帧的均值
+                new_query = np.array(vid2frameNum[query_vid], d)
                 for i in range(vid2frameNum[query_vid]):
-
-                
+                    cur_arr = [features[I[i]]]
+                    cur_arr = np.mean(cur_arr, axis=0, keepdims=False)
+                    cur_arr /= (np.linalg.norm(cur_arr, ord=2, axis=0))
+                    new_query[i] = cur_arr
                  
                 # 对n*kNeighbor[0]个帧做第二轮搜索
-                query_frame_features2 = np.squeeze(features[I])
+                query_frame_features2 = np.squeeze(new_query)
                 D2, I2 = index.search(query_frame_features2, kNeighbor[1])
                 similarities = np.stack((I2, D2), axis=-1)
 
                 # 对所有视频打分并排序获得结果
                 scorelog = collections.defaultdict(lambda: 0.0)
                 for i in range(similarities.shape[0]):
-                    cot = cnt[int(I[i])]
                     for j in range(similarities.shape[1]):
                         vid_idx = vid2idx[final_vids[int(similarities[i][j][0])]]
-                        scorelog[final_vids[int(similarities[i][j][0])]] += similarities[i][j][1] * cot
+                        scorelog[final_vids[int(similarities[i][j][0])]] += similarities[i][j][1]
 
                 res = []
                 for k, v in scorelog.items():
