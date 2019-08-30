@@ -205,7 +205,7 @@ if __name__ == '__main__':
     # 分为了两轮，第一轮对于有n个帧查询视频的每个帧，在所有视频帧中搜索与其最相似的kNeighbor[0]个帧
     # 第二轮对于这n*kNeighbor[0]个帧，在所有视频帧中搜索与其最相似的kNeighbor[1]个帧
     # 这样对于查询视频的每个帧，我们都获得了与其最相似的kNeighbor[0]*kNeighbor[1]个帧
-    kNeighbor = [75, 150]
+    kNeighbor = [5, 233]
 
     # 计算结果并进行评估
     for task_name in ['DSVR', 'CSVR', 'ISVR']:
