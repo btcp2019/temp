@@ -4,38 +4,57 @@ using namespace std;
 
 typedef long long ll;
 
-const int N = 1e5 + 5;
+const int N = 1e6 + 6;
 
-const int MOD = 1e9 + 7;
+int n, m;
 
-int n, p, q;
+char s[N], t[N];
 
-ll fac[N];//阶乘
+int nxt[N];
 
-ll s1, s2;//分子和分母
+int ok[N];
 
-ll qpow(ll x, ll k, ll Mod = MOD) {//O(logk)求(x^k)%Mod
-	ll res = 1;
-	for (x %= Mod; k > 0; x = x * x % Mod, k >>= 1)
-		if (k & 1) res = res * x % Mod;
-	return res;
+void kmp(int n, char *a) {
+	//长度为m的b中找a,下标从0开始,得到的是匹配成功的末尾位置
+	static int i, j;
+	for (nxt[0] = j = -1, i = 1; i < n; nxt[i ++] = j) {
+		while (~j && a[j + 1] != a[i]) j = nxt[j];
+		if (a[j + 1] == a[i]) j ++;
+	}
 }
 
-ll calc(ll n, ll m) {//O(logn)求C(n,m)
-	return fac[n] * qpow(fac[m], MOD - 2) % MOD * qpow(fac[n - m], MOD - 2) % MOD;
+int dfs(int x) {
+	if (ok[x] != -1) return ok[x];
+	if (x * 2 + 1 >= n) {
+		for (int i = 0, j = x + 1; j < n; i ++, j ++)
+			if (s[i] != s[j])
+				return ok[x] = 0;
+		return ok[x] = 1;
+	}
+	return ok[x] = nxt[x * 2 + 1] == x && dfs(x * 2 + 1);
+}
+
+bool judge(char *t, int n) {
+	for (int i = 0; i < n; i ++)
+		if (t[i] != s[i])
+			return 0;
+	return 1;
 }
 
 int main() {
-	cin >> n >> p >> q;
-	fac[0] = 1;
-	for (int i = 1; i <= n; i ++)
-		fac[i] = fac[i - 1] * i % MOD;
-	ll tmp;
-	for (int i = p; i + q <= n; i ++) {
-		tmp = calc(n, i);
-		s1 = (s1 + tmp * i % MOD) % MOD;
-		s2 = (s2 + tmp) % MOD;
+	ios::sync_with_stdio(false);
+	cin >> n >> s;
+	kmp(n, s);
+	for (int i = 0; i < n; i ++)
+		ok[i] = -1;
+	for (int i = 0; i < n; i ++)
+		dfs(i);
+	cin >> m; int ans = 0;
+	for (int len, i = 0; i < m; i ++) {
+		cin >> t; len = strlen(t);
+		if (!ok[len - 1] || !judge(t, len));
+		else ans ++; 
 	}
-	cout << (s1 * qpow(s2, MOD - 2) % MOD + MOD) % MOD;
+	cout << ans;
 	return 0;
 }
